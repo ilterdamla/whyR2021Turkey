@@ -1,0 +1,417 @@
+---
+title: "R'da Regresyon Analizi"
+subtitle: "İstanbul için Ev Fiyat Tahmin Modellemesi"
+output: html_notebook
+---
+
+```{r}
+
+######################################################
+######################################################
+###############  whyR? 2021 Turkey  ##################
+######################################################
+######################################################
+
+```
+
+# 0. Paketler ve Veri
+
+```{r}
+
+library(dplyr) #veri manipülasyonu
+library(reshape2) #veri manipülasyonu
+library(ggplot2) #veri görselleştirmesi
+library(gridExtra) #grid.arrange() ile görsellerin bir arada gösterilmesi
+
+# Regresyon:
+
+library(olsrr) #regresyon modellemesi için hızlı çözüm
+library(gvlma) #varsayım kontrolü
+library(ggpubr) #ggqqplot() ile normal dağılım kontrolü
+library(normtest) #jarque-bera normallik testi, jb.norm.test()
+library(lmtest) #breusch pagan sabit/değişen varyans testi, bptest()
+
+```
+
+```{r}
+
+df <- readxl::read_excel("master.xlsx") %>% 
+  mutate(bulundugu_kat_grup = as.numeric(bulundugu_kat_grup)) %>% 
+  mutate(
+    krediye_uygunluk = factor(krediye_uygunluk),
+    isinma_tipi_grup = factor(isinma_tipi_grup),
+    bulundugu_kat_grup = factor(bulundugu_kat_grup),
+    gelir_grup = factor(gelir_grup),
+    banyo_sayisi = factor(banyo_sayisi)
+  )
+
+```
+
+* Bağımlı ya da açıklanan değişken
+
+- fiyat
+
+* Bağımsız ya da açıklayıcı değişkenler
+
+- net_m2
+
+- bina_yasi
+
+- banyo_sayisi (1: 1, 0: Diğer)
+
+- isinma_tipi (1: Kombi, 2: Kat Kaloriferi, Merkezi (Pay Ölçer), 3: Klima, Merkezi, 4: Soba)
+
+- krediye_uygunluk (1: Uygun, 0: Uygun Değil)
+
+- bulundugu_kat (1: Bodrum, Bodrum ve Zemin, Kot 1, Kot 2, Kot 3, Yarı Bodrum, 2: Bahçe Katı, Giriş Katı, Yüksek Giriş, Zemin, 3: Çatı Katı, En Üst Kat, Teras Katı, 4: Diğer Katlar)
+
+- gelir (1: Ataşehir, Beykoz, Maltepe, 2: Çekmeköy, Kartal, Pendik, Sancaktepe, Sultanbeyli, Şile, Tuzla, Ümraniye, Üsküdar, 3: Adalar, Kadıköy)
+
+```{r}
+
+df <- select(df, ilce, fiyat, net_m2, bina_yasi, banyo_sayisi, isinma_tipi_grup, krediye_uygunluk, bulundugu_kat_grup, gelir_grup) %>% 
+  rename(
+    "isinma_tipi" = "isinma_tipi_grup",
+    "bulundugu_kat" = "bulundugu_kat_grup",
+    "gelir" = "gelir_grup"
+  )
+
+str(df)
+
+```
+
+# 1. Fiyat ve diğer değişkenler ile olan ilişkisi
+
+```{r}
+
+ggplot(df, aes(x = net_m2, y = fiyat)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  theme_minimal() -> gg1
+
+ggplot(df, aes(x = bina_yasi, y = fiyat)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  theme_minimal() -> gg2
+
+ggplot(df, aes(x = banyo_sayisi, y = fiyat, fill = banyo_sayisi)) +
+  geom_boxplot() +
+  theme_minimal() +
+  theme(legend.position = "none") -> gg3
+
+ggplot(df, aes(x = isinma_tipi, y = fiyat, fill = isinma_tipi)) +
+  geom_boxplot() +
+  theme_minimal() +
+  theme(legend.position = "none") -> gg4
+
+ggplot(df, aes(x = krediye_uygunluk, y = fiyat, fill = krediye_uygunluk)) +
+  geom_boxplot() +
+  theme_minimal() +
+  theme(legend.position = "none") -> gg5
+
+ggplot(df, aes(x = bulundugu_kat, y = fiyat, fill = bulundugu_kat)) +
+  geom_boxplot() +
+  theme_minimal() +
+  theme(legend.position = "none") -> gg6
+
+ggplot(df, aes(x = gelir, y = fiyat, fill = gelir)) +
+  geom_boxplot() +
+  theme_minimal() +
+  theme(legend.position = "none") -> gg7
+
+grid.arrange(gg1,gg2)
+grid.arrange(gg3,gg4,gg5,gg6,gg7)
+
+```
+
+# 2. Model
+
+$Y_i = \beta_1 + \beta_2X_{2i} + \beta_3X_{3i} + ... + \beta_kX_{ki} + \epsilon_i$
+
+## 2.1. Basit
+
+```{r}
+
+model1 <- lm(fiyat~net_m2,df)
+summary(model1)
+
+```
+
+## 2.2. Çoklu
+
+```{r}
+
+model2 <- lm(fiyat~net_m2+bina_yasi,df)
+summary(model2)
+
+```
+
+```{r}
+
+model3 <- lm(fiyat~.,df[,-1])
+summary(model3)
+
+```
+
+```{r}
+
+df <- within(df, krediye_uygunluk <- relevel(krediye_uygunluk, ref = "1"))
+
+model3 <- lm(fiyat~.-banyo_sayisi,df[,-1])
+summary(model3)
+
+```
+
+# 3. Modelin Değerlendirilmesi
+
+$\hat{e_i} = Y_i - \hat{Y_i}$
+
+```{r}
+
+df2 <- select(df, fiyat)
+
+df2$uyum1 <- model1$fitted.values
+df2$kalinti1 <- model1$residuals
+df2$uyum2 <- model2$fitted.values
+df2$kalinti2 <- model2$residuals
+df2$uyum3 <- model3$fitted.values
+df2$kalinti3 <- model3$residuals
+
+```
+
+* Fiyat ve Uyum
+
+```{r}
+
+df2 %>% 
+  select(fiyat,uyum1,uyum2,uyum3) %>% 
+  melt(id.vars = "fiyat", variable.name = "uyum", value.name = "deger") %>% 
+  ggplot(aes(x = fiyat, y = deger, color = uyum)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "black") +
+  facet_wrap(~uyum) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+```
+
+* Kalıntıların normalliği
+
+```{r}
+
+df2 %>% 
+  select(kalinti1,kalinti2,kalinti3) %>% 
+  melt(variable.name = "kalinti", value.name = "deger") %>% 
+  ggplot(aes(x = deger, fill = kalinti)) +
+  geom_histogram() +
+  facet_wrap(~kalinti) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+ggqqplot(df2$kalinti1)
+ggqqplot(df2$kalinti2)
+ggqqplot(df2$kalinti3)
+
+jb.norm.test(df2$kalinti1)
+jb.norm.test(df2$kalinti2)
+jb.norm.test(df2$kalinti3)
+
+```
+
+* Değişen varyans
+
+```{r}
+
+df2 %>% 
+  select(uyum3,kalinti3) %>% 
+  ggplot(aes(x = uyum3, y = kalinti3)) +
+  geom_point() +
+  geom_hline(yintercept = 0, color = "orange") +
+  theme_minimal()
+
+bptest(model1)
+bptest(model2)
+bptest(model3)
+
+```
+
+# 4. İlçe Bazında Model
+
+## 4.1. Kadıköy
+
+```{r}
+
+df_ilce <- df %>% 
+  filter(ilce=="Kadıköy") %>% 
+  select(-c(1,9))
+
+ggplot(df_ilce, aes(x = net_m2, y = fiyat)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "black") +
+  theme_minimal() +
+  theme(legend.position = "none") -> subg1
+
+ggplot(df_ilce, aes(x = bina_yasi, y = fiyat)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "black") +
+  theme_minimal() +
+  theme(legend.position = "none") -> subg2
+
+ggplot(df_ilce, aes(x = banyo_sayisi, y = fiyat, fill = banyo_sayisi)) +
+  geom_boxplot() +
+  theme_minimal() +
+  theme(legend.position = "none") -> subg3
+
+ggplot(df_ilce, aes(x = isinma_tipi, y = fiyat, fill = isinma_tipi)) +
+  geom_boxplot() +
+  theme_minimal() +
+  theme(legend.position = "none") -> subg4
+
+ggplot(df_ilce, aes(x = krediye_uygunluk, y = fiyat, fill = krediye_uygunluk)) +
+  geom_boxplot() +
+  theme_minimal() +
+  theme(legend.position = "none") -> subg5
+
+ggplot(df_ilce, aes(x = bulundugu_kat, y = fiyat, fill = bulundugu_kat)) +
+  geom_boxplot() +
+  theme_minimal() +
+  theme(legend.position = "none") -> subg6
+
+grid.arrange(subg1,subg2)
+grid.arrange(subg3,subg4,subg5,subg6)
+
+```
+
+Neden hızlı çözüm?
+
+```{r}
+
+2^6
+
+```
+
+Kaç farklı regresyon modeli kurmak mümkün?
+
+```{r}
+
+kadikoy_model <- lm(fiyat~., df_ilce)
+
+ols_step_all_possible(kadikoy_model)
+
+```
+
+Kriterlere (R2, AIC, MSEP gibi) göre en iyi modeli nasıl seçeriz?
+
+```{r}
+
+ols_step_best_subset(kadikoy_model)
+
+```
+
+Stepwise Regresyon
+
+İleriye Doğru Seçme (p değeri bazlı)
+
+```{r}
+
+ols_step_forward_p(kadikoy_model)
+
+```
+
+Geriye Doğru Eleme (p değeri bazlı)
+
+```{r}
+
+ols_step_backward_p(kadikoy_model)
+
+```
+
+Çift Yönlü Seçim (p değeri bazlı)
+
+```{r}
+
+ols_step_both_p(kadikoy_model)
+
+```
+
+ols_step_both_p() ile modeli seçtiğimizi varsayalım.
+
+```{r}
+
+km <- ols_step_both_p(kadikoy_model)
+
+```
+
+Kalıntılar için hızlı varsayım kontrolleri (normallik, sıfır ortalama, sabit varyans, bağımsızlık)
+
+```{r}
+
+#Kalıntılar, 0 çizgisinin etrafına rastgele dağılır (doğrusallık)
+#Kalıntılar, 0 çizgisinin etrafında yaklaşık bir yatay görünüm sergiler (sabit varyans)
+#Kalıntılardan uzakta olan değer/değerler yoktur (uç değer)
+
+ols_plot_resid_fit(km$model)
+
+```
+
+```{r}
+
+ols_plot_resid_qq(km$model)
+ols_test_normality(km$model)
+
+jb.norm.test(km$model$residuals)
+
+```
+
+```{r}
+
+ols_test_breusch_pagan(km$model)
+
+```
+
+```{r}
+
+#Bir gözlem örneklemdeki gözlem yığınlarından aşırı derecede uzakta: kaldıraç
+#Eğimin yönünü değiştiriyorsa: baskın nokta
+# Her aykırı değer != kaldıraç
+
+ols_plot_resid_lev(km$model)
+
+```
+
+```{r}
+
+gvlma_objesi <- gvlma(km$model)
+gvlma_objesi
+
+#Global Stat: Doğrusallık
+#Skewness&Kurtosis: Kalıntı normalliği
+#Link Function: Bağımlı değişken türü (sürekli)
+#Heteroscedasticity: Değişen varyans
+
+#plot(gvlma_objesi)
+
+```
+
+Final: Kadıköy'de oturuyorum. Evimin değeri ne kadar olabilir?
+
+$Pr[\hat\beta - t_{a/2}sh(\hat\beta) \le \beta \le \hat\beta + t_{a/2}sh(\hat\beta)]$
+
+```{r}
+
+confint(km$model, level = 0.95)
+
+km$model
+
+```
+
+```{r}
+
+predict(km$model, newdata = data.frame(bina_yasi = 5,
+                                       net_m2 = 90,
+                                       bulundugu_kat = factor(4),
+                                       isinma_tipi = factor(1))) -> evinfiyati
+
+paste0("Evin fiyatı: ", round(evinfiyati), " TL")
+
+```
